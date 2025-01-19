@@ -4,7 +4,6 @@
   "description": "Coffee shop menu API with SQLite and Express",
   "main": "server.js",
   "scripts": {
-    "dev": "nodemon server.js",
     "start": "node server.js",
     "postinstall": "npm install --omit=dev"
   },
