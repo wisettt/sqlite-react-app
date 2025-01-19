@@ -3,7 +3,7 @@ node_modules/
 
 # ละเว้นไฟล์ lock ของ npm และ Yarn
 package-lock.json
-yarn.lock
+
 
 # ละเว้นไฟล์สำหรับระบบปฏิบัติการ
 .DS_Store
@@ -11,3 +11,5 @@ Thumbs.db
 
 # ละเว้นไฟล์ .env (ข้อมูลลับ)
 .env
+menu.db
+uploads/
