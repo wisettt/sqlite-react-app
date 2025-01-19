@@ -1,8 +1,9 @@
 const express = require("express");
+const bodyParser = require("body-parser");
 const cors = require("cors");
 const path = require("path");
+require("dotenv").config(); // Load environment variables
 
-// Import routes
 const menuRoutes = require("./routes/menu");
 const authRoutes = require("./routes/auth").router;
 
@@ -10,25 +11,32 @@ const app = express();
 const port = process.env.PORT || 5000;
 
 // Middleware
-app.use(express.json());
+app.use(bodyParser.json());
 app.use(
   cors({
-    origin: ["http://localhost:3000", "http://localhost:5173"],
+    origin: process.env.NODE_ENV === "production"
+      ? "https://your-production-url.com"
+      : ["http://localhost:5173", "http://localhost:3000"],
     credentials: true,
   })
 );
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // Routes
-app.use("/menu", menuRoutes);
-app.use("/auth", authRoutes);
+app.use("/menu", menuRoutes); // Menu-related endpoints
+app.use("/auth", authRoutes); // Authentication endpoints
 
 // Home Route
 app.get("/", (req, res) => {
-  res.send("Welcome to the Menu Management API!");
+  res.send("Welcome to the Menu API!");
 });
 
-// Start Server
+// Error Handling Middleware
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({ error: "Something went wrong!" });
+});
+
 app.listen(port, () => {
-  console.log(`Server is running on http://localhost:${port}`);
+  console.log(`Server running at http://localhost:${port}`);
 });

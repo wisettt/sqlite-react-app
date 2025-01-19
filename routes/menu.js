@@ -7,26 +7,57 @@ const db = require("../db");
 
 const router = express.Router();
 const uploadDir = path.join(__dirname, "../uploads");
+
+// ตรวจสอบว่ามีโฟลเดอร์ uploads หรือไม่ หากไม่มีให้สร้างใหม่
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 
+// ตั้งค่า multer สำหรับจัดการการอัปโหลดไฟล์
 const storage = multer.diskStorage({
   destination: uploadDir,
   filename: (req, file, cb) => cb(null, `${Date.now()}_${file.originalname}`),
 });
+
 const fileFilter = (req, file, cb) => {
   const allowedTypes = ["image/jpeg", "image/png", "image/jpg"];
-  if (!allowedTypes.includes(file.mimetype)) return cb(new Error("File type not allowed"), false);
+  if (!allowedTypes.includes(file.mimetype)) {
+    return cb(new Error("File type not allowed"), false);
+  }
   cb(null, true);
 };
-const upload = multer({ storage, fileFilter, limits: { fileSize: 2 * 1024 * 1024 } });
+
+const upload = multer({
+  storage,
+  fileFilter,
+  limits: { fileSize: 2 * 1024 * 1024 },
+});
+
+// Validation Schema สำหรับตรวจสอบข้อมูล
+const Joi = require("joi");
+const menuSchema = Joi.object({
+  name: Joi.string().required(),
+  price: Joi.number().greater(0).required(),
+  details: Joi.string().required(),
+  isAvailable: Joi.boolean().optional(),
+});
 
 // Add Menu
-router.post("/add-menu", authenticateToken, upload.single("image"), (req, res) => {
-  const { name, price, details } = req.body;
-  const imageUrl = req.file ? `/uploads/${req.file.filename}` : null;
+router.post("/add-menu", authenticateToken, (req, res, next) => {
+  upload.single("image")(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      return res.status(400).json({ success: false, error: err.message });
+    } else if (err) {
+      return res.status(500).json({ success: false, error: "Unexpected error during file upload." });
+    }
+    next();
+  });
+}, (req, res) => {
+  const { error, value } = menuSchema.validate(req.body);
+  if (error) {
+    return res.status(400).json({ success: false, error: error.details[0].message });
+  }
 
-  if (!name || !price || !details)
-    return res.status(400).json({ success: false, error: "Missing required fields." });
+  const { name, price, details } = value;
+  const imageUrl = req.file ? `/uploads/${req.file.filename}` : null;
 
   db.run(
     `INSERT INTO menu (name, price, details, image) VALUES (?, ?, ?, ?)`,
@@ -42,9 +73,10 @@ router.post("/add-menu", authenticateToken, upload.single("image"), (req, res) =
   );
 });
 
-// Get All Menus
+// Get All Menus (with Pagination)
 router.get("/", authenticateToken, (req, res) => {
-  const { onlyAvailable } = req.query;
+  const { onlyAvailable, page = 1, limit = 10 } = req.query;
+  const offset = (page - 1) * limit;
 
   let query = "SELECT * FROM menu";
   const params = [];
@@ -54,22 +86,37 @@ router.get("/", authenticateToken, (req, res) => {
     params.push(1);
   }
 
+  query += " LIMIT ? OFFSET ?";
+  params.push(Number(limit), Number(offset));
+
   db.all(query, params, (err, rows) => {
     if (err) return res.status(500).json({ success: false, error: "Failed to fetch menus." });
-    if (rows.length === 0)
-      return res.status(404).json({ success: false, message: "ไม่มีเมนูในระบบ" });
     res.status(200).json({ success: true, data: rows });
   });
 });
 
 // Update Menu
-router.put("/update-menu/:id", authenticateToken, upload.single("image"), (req, res) => {
+router.put("/update-menu/:id", authenticateToken, (req, res, next) => {
+  upload.single("image")(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      return res.status(400).json({ success: false, error: err.message });
+    } else if (err) {
+      return res.status(500).json({ success: false, error: "Unexpected error during file upload." });
+    }
+    next();
+  });
+}, (req, res) => {
   const { id } = req.params;
   const { name, price, details } = req.body;
   const imageUrl = req.file ? `/uploads/${req.file.filename}` : null;
 
-  if (!name || !price || !details) {
-    return res.status(400).json({ success: false, error: "Missing required fields." });
+  if (!id || isNaN(id)) {
+    return res.status(400).json({ success: false, message: "Invalid ID format." });
+  }
+
+  const { error } = menuSchema.validate({ name, price, details });
+  if (error) {
+    return res.status(400).json({ success: false, error: error.details[0].message });
   }
 
   db.get("SELECT * FROM menu WHERE id = ?", [id], (err, row) => {
@@ -102,7 +149,7 @@ router.put("/availability/:id", authenticateToken, (req, res) => {
   const { isAvailable } = req.body;
 
   if (!id || isNaN(id)) {
-    return res.status(400).json({ success: false, message: "Invalid ID" });
+    return res.status(400).json({ success: false, message: "Invalid ID format." });
   }
 
   if (typeof isAvailable !== "boolean") {
@@ -130,6 +177,10 @@ router.put("/availability/:id", authenticateToken, (req, res) => {
 // Delete Menu
 router.delete("/delete-menu/:id", authenticateToken, (req, res) => {
   const { id } = req.params;
+
+  if (!id || isNaN(id)) {
+    return res.status(400).json({ success: false, message: "Invalid ID format." });
+  }
 
   db.get("SELECT * FROM menu WHERE id = ?", [id], (err, row) => {
     if (err) return res.status(500).json({ success: false, error: "Failed to fetch menu." });
