@@ -9,6 +9,7 @@
     "postinstall": "npm install --build-from-source sqlite3"
   },
   "dependencies": {
+    "axios": "^1.7.9",
     "better-sqlite3": "^11.8.1",
     "body-parser": "^1.20.3",
     "cors": "^2.8.5",
@@ -16,7 +17,8 @@
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",
     "multer": "^1.4.5-lts.1",
-    "path": "^0.12.7"
+    "path": "^0.12.7",
+    "sqlite3": "^5.1.7"
   },
   "devDependencies": {
     "nodemon": "^3.0.0"
