@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "nodemon server.js",
     "start": "node server.js",
-    "postinstall": "npm install --build-from-source sqlite3"
+    "postinstall": "npm install --omit=dev"
   },
   "dependencies": {
     "axios": "^1.7.9",
