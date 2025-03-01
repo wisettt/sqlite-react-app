@@ -16,19 +16,19 @@ const app = express();
 const port = process.env.PORT || 5000;
 
 // ✅ ตรวจสอบ environment variables ที่จำเป็น
-if (!process.env.JWT_SECRET) {
-  console.error("Error: JWT_SECRET is not defined in .env or environment variables.");
-  process.exit(1);
-}
+const requiredEnvVars = ["JWT_SECRET", "DATABASE_URL", "PRODUCTION_URL"];
+requiredEnvVars.forEach((key) => {
+  if (!process.env[key]) {
+    console.error(`❌ Error: ${key} is not set in .env`);
+    process.exit(1);
+  }
+});
 
 // ✅ Middleware
 app.use(bodyParser.json());
 app.use(
   cors({
-    origin:
-      process.env.NODE_ENV === "production"
-        ? process.env.PRODUCTION_URL
-        : ["http://localhost:5173", "http://localhost:3000"],
+    origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : "*",
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE"],
     allowedHeaders: ["Content-Type", "Authorization"],
@@ -36,46 +36,48 @@ app.use(
 );
 
 // ✅ Static Files
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+app.use("/uploads", express.static(path.resolve(__dirname, "uploads")));
 
 // ✅ ตรวจสอบโฟลเดอร์ QR Code
-const qrCodeFolder = path.join(__dirname, "uploads", "qr_codes");
+const qrCodeFolder = path.resolve(__dirname, "uploads", "qr_codes");
 if (!fs.existsSync(qrCodeFolder)) {
-    fs.mkdirSync(qrCodeFolder, { recursive: true });
+  fs.mkdirSync(qrCodeFolder, { recursive: true });
 }
 
 // ✅ API สำหรับสร้าง QR Code และบันทึกเป็นไฟล์
 app.get("/generate-qr/:table", async (req, res) => {
-    const { table } = req.params;
-    const url = `http://localhost:3000/?table=${table}`;
-    const qrPath = path.join(qrCodeFolder, `table_${table}.png`);
+  const { table } = req.params;
+  const baseUrl = process.env.PRODUCTION_URL || `http://localhost:${port}`;
+  const url = `${baseUrl}/?table=${table}`;
+  const qrPath = path.join(qrCodeFolder, `table_${table}.png`);
 
-    try {
-        await QRCode.toFile(qrPath, url);
-        res.json({ table, qrCodeUrl: `http://localhost:5000/uploads/qr_codes/table_${table}.png` });
-    } catch (err) {
-        res.status(500).json({ error: "QR Code generation failed" });
-    }
+  try {
+    await QRCode.toFile(qrPath, url);
+    res.json({ table, qrCodeUrl: `${baseUrl}/uploads/qr_codes/table_${table}.png` });
+  } catch (err) {
+    res.status(500).json({ error: "QR Code generation failed" });
+  }
 });
 
 // ✅ API สำหรับดึง QR Code ทั้งหมด
 app.get("/list-qr", (req, res) => {
-    fs.readdir(qrCodeFolder, (err, files) => {
-        if (err) return res.status(500).json({ error: "Cannot read QR code folder" });
+  fs.readdir(qrCodeFolder, (err, files) => {
+    if (err) return res.status(500).json({ error: "Cannot read QR code folder" });
 
-        const qrList = files.map(file => ({
-            table: file.replace("table_", "").replace(".png", ""),
-            qrCodeUrl: `http://localhost:5000/uploads/qr_codes/${file}`
-        }));
+    const baseUrl = process.env.PRODUCTION_URL || `http://localhost:${port}`;
+    const qrList = files.map(file => ({
+      table: file.replace("table_", "").replace(".png", ""),
+      qrCodeUrl: `${baseUrl}/uploads/qr_codes/${file}`
+    }));
 
-        res.json(qrList);
-    });
+    res.json(qrList);
+  });
 });
 
 // ✅ Routes
 app.use("/menu", menuRoutes);
 app.use("/auth", authRoutes);
-app.use("/orders", ordersRoutes); // ✅ แก้ path ให้ถูกต้อง
+app.use("/orders", ordersRoutes);
 
 // ✅ Home Route
 app.get("/", (req, res) => {
@@ -111,7 +113,18 @@ app.get("/public-menu", (req, res) => {
       console.error("Failed to fetch menus:", err);
       return res.status(500).json({ success: false, error: "Failed to fetch menus." });
     }
-    res.status(200).json({ success: true, data: rows });
+
+    // ✅ คำนวณจำนวนรายการทั้งหมดสำหรับ Pagination
+    db.get("SELECT COUNT(*) AS total FROM menu", [], (err, countRow) => {
+      if (err) {
+        return res.status(500).json({ success: false, error: "Failed to count menus." });
+      }
+      res.status(200).json({
+        success: true,
+        totalCount: countRow.total,
+        data: rows
+      });
+    });
   });
 });
 
