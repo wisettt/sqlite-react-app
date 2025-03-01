@@ -17,7 +17,7 @@ if (!SECRET_KEY) {
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "admin@example.com";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "1111";
 
-// Validation Schema
+// Validation Schema สำหรับ login
 const loginSchema = Joi.object({
   email: Joi.string().email().required(),
   password: Joi.string().min(4).required(),
@@ -46,12 +46,19 @@ router.post("/login", (req, res) => {
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers.authorization;
 
+  // ตรวจสอบว่า Authorization Header มีหรือไม่
   if (!authHeader) {
     return res.status(401).json({ success: false, message: "ไม่ได้รับ Token" });
   }
 
   const token = authHeader.split(" ")[1];
 
+  // ตรวจสอบว่า Token มีอยู่ใน Header หรือไม่
+  if (!token) {
+    return res.status(401).json({ success: false, message: "Token ไม่ถูกต้อง" });
+  }
+
+  // ตรวจสอบความถูกต้องของ Token
   jwt.verify(token, SECRET_KEY, (err, user) => {
     if (err) {
       if (err.name === "TokenExpiredError") {
@@ -60,6 +67,7 @@ const authenticateToken = (req, res, next) => {
       return res.status(403).json({ success: false, message: "Token ไม่ถูกต้อง" });
     }
 
+    // เมื่อ Token ถูกต้อง จะบันทึกข้อมูลของผู้ใช้ (user) ใน req.user
     req.user = user;
     next();
   });
