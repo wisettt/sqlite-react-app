@@ -13,3 +13,7 @@ Thumbs.db
 .env
 menu.db
 uploads/
+
+node_modules/
+data/*.db
+uploads/
