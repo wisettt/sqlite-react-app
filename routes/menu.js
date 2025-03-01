@@ -132,7 +132,6 @@ router.put(
   (req, res) => {
     const { id } = req.params;
     const { name, price, details } = req.body;
-    const imageUrl = req.file ? `/uploads/${req.file.filename}` : null;
 
     if (!id || isNaN(id)) {
       return res.status(400).json({ success: false, message: "Invalid ID." });
@@ -146,13 +145,19 @@ router.put(
       if (!row)
         return res.status(404).json({ success: false, message: "Menu not found." });
 
+      let imageUrl = req.file ? `/uploads/${req.file.filename}` : null;
+
+      if (!imageUrl) {
+        imageUrl = row.image; // ใช้รูปภาพเดิมถ้าไม่มีการอัปโหลดใหม่
+      }
+
       if (row.image && req.file) {
         const oldImagePath = path.join(__dirname, "..", row.image);
         if (fs.existsSync(oldImagePath)) fs.unlinkSync(oldImagePath);
       }
 
       db.run(
-        `UPDATE menu SET name = ?, price = ?, details = ?, image = COALESCE(?, image), updatedAt = datetime('now') WHERE id = ?`,
+        `UPDATE menu SET name = ?, price = ?, details = ?, image = ?, updatedAt = datetime('now') WHERE id = ?`,
         [name, price, details, imageUrl, id],
         function (err) {
           if (err)
