@@ -10,13 +10,13 @@ require("dotenv").config();
 const menuRoutes = require("./routes/menu");
 const authRoutes = require("./routes/auth").router;
 const ordersRoutes = require("./routes/orders");
-const db = require("./db");
+const sqlite3 = require("sqlite3").verbose();
 
 const app = express();
 const port = process.env.PORT || 5000;
 
 // ✅ ตรวจสอบ environment variables ที่จำเป็น
-const requiredEnvVars = ["JWT_SECRET", "DATABASE_URL", "PRODUCTION_URL"];
+const requiredEnvVars = ["JWT_SECRET", "DATABASE_URL", "PRODUCTION_URL", "ALLOWED_ORIGINS"];
 requiredEnvVars.forEach((key) => {
   if (!process.env[key]) {
     console.error(`❌ Error: ${key} is not set in .env`);
@@ -24,11 +24,30 @@ requiredEnvVars.forEach((key) => {
   }
 });
 
+// ✅ ตั้งค่า Database Path ให้ถูกต้องสำหรับ Render
+const dbPath = path.join(__dirname, "data", "menu.db");
+
+// ✅ ตรวจสอบว่าโฟลเดอร์ `data/` มีอยู่หรือไม่ ถ้าไม่มีให้สร้าง
+const dataFolder = path.join(__dirname, "data");
+if (!fs.existsSync(dataFolder)) {
+  fs.mkdirSync(dataFolder, { recursive: true });
+}
+
+// ✅ เชื่อมต่อฐานข้อมูล SQLite
+const db = new sqlite3.Database(dbPath, (err) => {
+  if (err) {
+    console.error("❌ Cannot connect to SQLite database:", err.message);
+    process.exit(1);
+  } else {
+    console.log(`✅ Connected to SQLite database at ${dbPath}`);
+  }
+});
+
 // ✅ Middleware
 app.use(bodyParser.json());
 app.use(
   cors({
-    origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : "*",
+    origin: process.env.ALLOWED_ORIGINS.split(","),
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE"],
     allowedHeaders: ["Content-Type", "Authorization"],
@@ -75,9 +94,9 @@ app.get("/list-qr", (req, res) => {
 });
 
 // ✅ Routes
-app.use("/menu", menuRoutes);
-app.use("/auth", authRoutes);
-app.use("/orders", ordersRoutes);
+app.use("/api/menu", menuRoutes);
+app.use("/api/auth", authRoutes);
+app.use("/api/orders", ordersRoutes);
 
 // ✅ Home Route
 app.get("/", (req, res) => {
@@ -93,7 +112,7 @@ app.use((err, req, res, next) => {
 });
 
 // ✅ Route สำหรับดึงเมนูโดยไม่ต้องล็อกอิน
-app.get("/public-menu", (req, res) => {
+app.get("/api/public-menu", (req, res) => {
   const { onlyAvailable, page = 1, limit = 10 } = req.query;
   const offset = (page - 1) * limit;
 
@@ -129,7 +148,7 @@ app.get("/public-menu", (req, res) => {
 });
 
 // ✅ Route สำหรับดึงเมนูเฉพาะ ID
-app.get("/menu/:id", (req, res) => {
+app.get("/api/menu/:id", (req, res) => {
   const { id } = req.params;
 
   if (!id || isNaN(id)) {
@@ -150,5 +169,6 @@ app.get("/menu/:id", (req, res) => {
 
 // ✅ Start the server
 app.listen(port, () => {
-  console.log(`🚀 Server running at http://localhost:${port}`);
+  console.log(`🚀 Server running on port ${port}`);
+  console.log(`✅ API available at: http://localhost:${port}/api/menu`);
 });
