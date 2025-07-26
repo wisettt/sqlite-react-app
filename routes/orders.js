@@ -1,135 +1,175 @@
 const express = require("express");
 const router = express.Router();
-const db = require("../db"); // เชื่อมกับฐานข้อมูล SQLite หรือ MySQL
+const db = require("../db");
+const cors = require("cors");
+
+require("dotenv").config();
+const API_URL = process.env.API_URL || "http://localhost:5000";  // ✅ กำหนด API_URL
+// ✅ ตั้งค่า CORS ให้ API อนุญาตทุกโดเมน
+const corsOptions = {
+    origin: "*", // ✅ อนุญาตทุกที่ (Allow All Origins)
+    methods: ["GET", "POST", "PUT", "DELETE"], // ✅ ระบุ HTTP Methods ที่อนุญาต
+    allowedHeaders: ["Content-Type", "Authorization"], // ✅ อนุญาต Headers สำคัญ
+};
+
+// ✅ ใช้ CORS
+router.use(cors(corsOptions));
+router.use(express.json());
+
+// ✅ Middleware: จำกัดให้ API ใช้ได้เฉพาะ localhost
+const checkLocalhost = (req, res, next) => {
+    if (req.hostname !== "localhost") {
+        return res.status(403).json({ success: false, message: "API นี้ใช้ได้เฉพาะบน localhost เท่านั้น" });
+    }
+    next();
+};
 
 // ✅ POST: เพิ่มคำสั่งซื้อใหม่ (สำหรับโต๊ะที่ระบุ)
-router.post("/", (req, res) => {
+router.post("/", checkLocalhost, (req, res) => {
   const { table, items, totalAmount } = req.body;
 
-  console.log("📦 รับข้อมูลจาก Frontend:", req.body); // ✅ Debug
+  console.log("📦 รับข้อมูลจาก Frontend:", req.body);
 
-  // 🔹 ตรวจสอบค่าที่จำเป็น
   if (!table || !items || items.length === 0 || !totalAmount || totalAmount <= 0) {
-    return res.status(400).json({ error: "Table, items, and totalAmount are required" });
+      return res.status(400).json({ error: "ต้องระบุ Table, items และ totalAmount" });
   }
 
-  // 🔹 บันทึกออเดอร์ลง Database
+  // ✅ JSON.stringify(items) จะเก็บ URL ของรูปภาพไปด้วย
   const sql = "INSERT INTO orders (table_number, items, total_amount, date) VALUES (?, ?, ?, ?)";
   const params = [table, JSON.stringify(items), totalAmount, new Date().toISOString()];
 
   db.run(sql, params, function (err) {
-    if (err) {
-      console.error("❌ Error inserting order into database:", err.message);
-      return res.status(500).json({ error: err.message });
-    }
-    console.log("✅ ออเดอร์ถูกบันทึกลง Database:", { id: this.lastID, table, items, totalAmount });
-    res.status(201).json({
-      id: this.lastID,
-      table,
-      items,
-      totalAmount,
-      message: `บันทึกออเดอร์โต๊ะที่ ${table} สำเร็จ`,
+      if (err) {
+          console.error("❌ Error inserting order:", err.message);
+          return res.status(500).json({ error: err.message });
+      }
+      res.status(201).json({
+          id: this.lastID,
+          table,
+          items,
+          totalAmount,
+          message: `บันทึกออเดอร์โต๊ะที่ ${table} สำเร็จ`,
+      });
+  });
+});
+
+// ✅ PUT: อัพเดตสถานะการชำระเงิน
+router.put("/:id/payment", (req, res) => {
+    const { id } = req.params;
+    const sql = "UPDATE orders SET payment_status = 'paid' WHERE id = ?"; // 🔥 เปลี่ยนเป็น payment_status
+  
+    db.run(sql, [id], function (err) {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+      if (this.changes === 0) {
+        return res.status(404).json({ error: "ไม่พบออเดอร์" });
+      }
+  
+      res.status(200).json({ message: "✅ ออเดอร์ถูกชำระเงินแล้ว" });
     });
   });
-});
-
-// ✅ PUT: อัพเดตสถานะการชำระเงินของออเดอร์
-router.put("/:id/payment", (req, res) => {
-  const { id } = req.params; // รับ id ของคำสั่งซื้อ
-  const sql = "UPDATE orders SET payment_status = 'paid' WHERE id = ?"; // คำสั่ง SQL ที่อัปเดตสถานะการชำระเงิน
+// ✅ PUT: อัพเดตสถานะออเดอร์เป็น "delivered"
+router.put("/:id/delivery", (req, res) => {
+  const { id } = req.params;
+  const sql = "UPDATE orders SET status = 'delivered' WHERE id = ?";
 
   db.run(sql, [id], function (err) {
-    if (err) {
-      console.error("❌ Error updating payment status:", err.message);
-      return res.status(500).json({ error: err.message });
-    }
-    if (this.changes === 0) {
-      return res.status(404).json({ error: "Order not found" }); // หากไม่พบคำสั่งซื้อ
-    }
-    console.log(`✅ ออเดอร์ ID ${id} ได้รับการชำระเงินแล้ว`);
-    res.status(200).json({ message: "ออเดอร์ได้รับการชำระเงินแล้ว" }); // ส่งข้อความตอบกลับ
+      if (err) {
+          return res.status(500).json({ error: err.message });
+      }
+      if (this.changes === 0) {
+          return res.status(404).json({ error: "ไม่พบออเดอร์" });
+      }
+      res.status(200).json({ message: "✅ ออเดอร์ถูกส่งเรียบร้อยแล้ว" });
   });
 });
+
 
 // ✅ GET: ดึงข้อมูลคำสั่งซื้อทั้งหมด หรือเฉพาะโต๊ะที่ระบุ
 router.get("/", (req, res) => {
-  const { table } = req.query; // ✅ ใช้ `table` แทน `tableNumber`
+  const sql = "SELECT * FROM orders WHERE status != 'paid'";  // ✅ โหลดเฉพาะที่ยังไม่จ่าย
 
-  let sql = "SELECT * FROM orders";
-  let params = [];
-
-  if (table) {
-    sql += " WHERE table_number = ?";
-    params.push(table);
-  }
-
-  db.all(sql, params, (err, rows) => {
-    if (err) {
-      console.error("❌ Error fetching orders:", err.message);
-      return res.status(500).json({ error: err.message });
-    }
-    console.log("✅ ดึงข้อมูลออเดอร์สำเร็จ:", rows);
-    res.status(200).json(rows);
+  db.all(sql, [], (err, rows) => {
+      if (err) {
+          return res.status(500).json({ error: err.message });
+      }
+      res.status(200).json(rows);
   });
 });
 
-// ✅ GET: ดึงข้อมูลคำสั่งซื้อทีละรายการ โดยใช้ id
-router.get("/:id", (req, res) => {
-  const { id } = req.params;
-  const sql = "SELECT * FROM orders WHERE id = ?";
-
-  db.get(sql, [id], (err, row) => {
-    if (err) {
-      console.error("❌ Error fetching order by ID:", err.message);
-      return res.status(500).json({ error: err.message });
-    }
-    if (!row) {
-      return res.status(404).json({ error: "Order not found" });
-    }
-    console.log("✅ ดึงข้อมูลออเดอร์สำเร็จ:", row);
-    res.status(200).json(row);
+// ✅ GET: ดึงข้อมูลเฉพาะออเดอร์ที่ชำระเงินแล้ว
+router.get("/paid-orders", (req, res) => {
+    const sql = "SELECT id, table_number, items, total_amount, date FROM orders WHERE payment_status = 'paid'";
+  
+    db.all(sql, [], (err, rows) => {
+      if (err) {
+        console.error("❌ Error fetching paid orders:", err.message);
+        return res.status(500).json({ error: err.message });
+      }
+  
+      if (!rows || rows.length === 0) {
+        console.warn("⚠️ ไม่พบออเดอร์ที่ชำระเงินแล้ว");
+        return res.status(404).json({ error: "ไม่พบออเดอร์ที่ชำระเงินแล้ว" });
+      }
+  
+      console.log("📢 ออเดอร์ที่จ่ายเงินแล้ว:", rows);
+      res.status(200).json(rows);
+    });
   });
+
+
+// ✅ GET: ดึงข้อมูลคำสั่งซื้อทีละรายการ
+router.get("/:id", checkLocalhost, (req, res) => {
+    const { id } = req.params;
+    const sql = "SELECT * FROM orders WHERE id = ?";
+
+    db.get(sql, [id], (err, row) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        if (!row) {
+            return res.status(404).json({ error: "ไม่พบออเดอร์" });
+        }
+        res.status(200).json(row);
+    });
 });
 
 // ✅ DELETE: ลบคำสั่งซื้อทั้งหมดของโต๊ะที่ระบุ
-router.delete("/", (req, res) => {
-  const { table } = req.query; // ✅ ใช้ `table` แทน `tableNumber`
-
-  if (!table) {
-    return res.status(400).json({ error: "Table number is required" });
-  }
-
-  const sql = "DELETE FROM orders WHERE table_number = ?";
-
-  db.run(sql, table, function (err) {
-    if (err) {
-      console.error("❌ Error deleting orders:", err.message);
-      return res.status(500).json({ error: err.message });
+router.delete("/", checkLocalhost, (req, res) => {
+    const { table } = req.query;
+    if (!table) {
+        return res.status(400).json({ error: "ต้องระบุหมายเลขโต๊ะ" });
     }
-    if (this.changes === 0) {
-      return res.status(404).json({ error: "No orders found for this table" });
-    }
-    console.log(`✅ ออเดอร์ของโต๊ะ ${table} ถูกลบเรียบร้อยแล้ว`);
-    res.status(200).json({ message: `ออเดอร์ของโต๊ะ ${table} ถูกลบเรียบร้อยแล้ว` });
-  });
+
+    const sql = "DELETE FROM orders WHERE table_number = ?";
+    db.run(sql, table, function (err) {
+        if (err) {
+           return res.status(500).json({ error: err.message });
+       }
+        if (this.changes === 0) {
+            return res.status(404).json({ error: "ไม่พบออเดอร์ของโต๊ะนี้" });
+       }
+        res.status(200).json({ message: `ออเดอร์ของโต๊ะ ${table} ถูกลบเรียบร้อยแล้ว` });
+    });
 });
 
-// ✅ DELETE: ลบคำสั่งซื้อทีละรายการโดยใช้ id
-router.delete("/:id", (req, res) => {
-  const { id } = req.params;
-  const sql = "DELETE FROM orders WHERE id = ?";
+// ✅ DELETE: ลบคำสั่งซื้อทีละรายการ
+router.delete("/:id", checkLocalhost, (req, res) => {
+    const { id } = req.params;
+    const sql = "DELETE FROM orders WHERE id = ?";
 
-  db.run(sql, id, function (err) {
-    if (err) {
-      console.error("❌ Error deleting order by ID:", err.message);
-      return res.status(500).json({ error: err.message });
-    }
-    if (this.changes === 0) {
-      return res.status(404).json({ error: "Order not found" });
-    }
-    console.log(`✅ คำสั่งซื้อ ID ${id} ถูกลบเรียบร้อยแล้ว`);
-    res.status(200).json({ message: "คำสั่งซื้อนี้ถูกลบเรียบร้อยแล้ว" });
-  });
+    db.run(sql, id, function (err) {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        if (this.changes === 0) {
+            return res.status(404).json({ error: "ไม่พบออเดอร์" });
+        }
+        res.status(200).json({ message: "ออเดอร์ถูกลบเรียบร้อยแล้ว" });
+    });
 });
 
+
+  
 module.exports = router;

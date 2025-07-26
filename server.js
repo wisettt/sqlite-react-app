@@ -1,6 +1,7 @@
 const express = require("express");
 const bodyParser = require("body-parser");
 const cors = require("cors");
+const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const QRCode = require("qrcode");
@@ -10,30 +11,44 @@ require("dotenv").config();
 const menuRoutes = require("./routes/menu");
 const authRoutes = require("./routes/auth").router;
 const ordersRoutes = require("./routes/orders");
+const tableRoutes = require("./routes/tables");
 const sqlite3 = require("sqlite3").verbose();
-
+// นำเข้าไฟล์ routes
 const app = express();
 const port = process.env.PORT || 5000;
 
-// ✅ ตรวจสอบ environment variables ที่จำเป็น
-const requiredEnvVars = ["JWT_SECRET", "DATABASE_URL", "PRODUCTION_URL", "ALLOWED_ORIGINS"];
-requiredEnvVars.forEach((key) => {
-  if (!process.env[key]) {
-    console.error(`❌ Error: ${key} is not set in .env`);
-    process.exit(1);
-  }
+// ✅ ตั้งค่า CORS ให้รองรับ React (`localhost:3000` และ `localhost:5173`)
+app.use(
+  cors({
+    origin: ["http://localhost:3000", "http://localhost:5173"], 
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    credentials: true,
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
+
+// ✅ ตั้งค่า Multer สำหรับอัปโหลดไฟล์ (สร้างโฟลเดอร์อัตโนมัติ)
+const uploadDir = path.join(__dirname, "uploads");
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+
+const storage = multer.diskStorage({
+  destination: uploadDir,
+  filename: (req, file, cb) => {
+    cb(null, `${Date.now()}_${file.originalname}`);
+  },
 });
+const upload = multer({ storage });
 
-// ✅ ตั้งค่า Database Path ให้ถูกต้องสำหรับ Render
-const dbPath = path.join(__dirname, "data", "menu.db");
-
-// ✅ ตรวจสอบว่าโฟลเดอร์ `data/` มีอยู่หรือไม่ ถ้าไม่มีให้สร้าง
-const dataFolder = path.join(__dirname, "data");
-if (!fs.existsSync(dataFolder)) {
-  fs.mkdirSync(dataFolder, { recursive: true });
-}
+// ✅ อ่าน FormData และ JSON อย่างถูกต้อง
+app.use(express.urlencoded({ extended: true })); // รองรับ FormData
+app.use(express.json()); // รองรับ JSON
 
 // ✅ เชื่อมต่อฐานข้อมูล SQLite
+const dbPath = path.join(__dirname, "data", "menu.db");
+if (!fs.existsSync(path.join(__dirname, "data"))) {
+  fs.mkdirSync(path.join(__dirname, "data"), { recursive: true });
+}
+
 const db = new sqlite3.Database(dbPath, (err) => {
   if (err) {
     console.error("❌ Cannot connect to SQLite database:", err.message);
@@ -43,19 +58,12 @@ const db = new sqlite3.Database(dbPath, (err) => {
   }
 });
 
-// ✅ Middleware
-app.use(bodyParser.json());
-app.use(
-  cors({
-    origin: process.env.ALLOWED_ORIGINS.split(","),
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
-
-// ✅ Static Files
-app.use("/uploads", express.static(path.resolve(__dirname, "uploads")));
+// ✅ Static Files (ให้สามารถเข้าถึงไฟล์อัปโหลดได้)
+app.use("/uploads", express.static(path.resolve(__dirname, "uploads"), {
+  setHeaders: (res, path, stat) => {
+    res.set("Access-Control-Allow-Origin", "*"); // ✅ อนุญาตให้ทุกโดเมนดึงรูป
+  }
+}));
 
 // ✅ ตรวจสอบโฟลเดอร์ QR Code
 const qrCodeFolder = path.resolve(__dirname, "uploads", "qr_codes");
@@ -66,7 +74,7 @@ if (!fs.existsSync(qrCodeFolder)) {
 // ✅ API สำหรับสร้าง QR Code และบันทึกเป็นไฟล์
 app.get("/generate-qr/:table", async (req, res) => {
   const { table } = req.params;
-  const baseUrl = process.env.PRODUCTION_URL || `http://localhost:${port}`;
+  const baseUrl = `http://localhost:${port}`;
   const url = `${baseUrl}/?table=${table}`;
   const qrPath = path.join(qrCodeFolder, `table_${table}.png`);
 
@@ -83,7 +91,7 @@ app.get("/list-qr", (req, res) => {
   fs.readdir(qrCodeFolder, (err, files) => {
     if (err) return res.status(500).json({ error: "Cannot read QR code folder" });
 
-    const baseUrl = process.env.PRODUCTION_URL || `http://localhost:${port}`;
+    const baseUrl = `http://localhost:${port}`;
     const qrList = files.map(file => ({
       table: file.replace("table_", "").replace(".png", ""),
       qrCodeUrl: `${baseUrl}/uploads/qr_codes/${file}`
@@ -93,11 +101,11 @@ app.get("/list-qr", (req, res) => {
   });
 });
 
-// ✅ Routes
+// ✅ ใช้งาน Routes (ต้องอยู่หลัง express.json())
 app.use("/api/menu", menuRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/orders", ordersRoutes);
-
+app.use("/api/tables", tableRoutes);
 // ✅ Home Route
 app.get("/", (req, res) => {
   res.send("Welcome to the Coffee Shop API!");
@@ -111,64 +119,12 @@ app.use((err, req, res, next) => {
   });
 });
 
-// ✅ Route สำหรับดึงเมนูโดยไม่ต้องล็อกอิน
-app.get("/api/public-menu", (req, res) => {
-  const { onlyAvailable, page = 1, limit = 10 } = req.query;
-  const offset = (page - 1) * limit;
-
-  let query = "SELECT * FROM menu";
-  const params = [];
-
-  if (onlyAvailable === "true") {
-    query += " WHERE isAvailable = ?";
-    params.push(1);
-  }
-
-  query += " LIMIT ? OFFSET ?";
-  params.push(Number(limit), Number(offset));
-
-  db.all(query, params, (err, rows) => {
-    if (err) {
-      console.error("Failed to fetch menus:", err);
-      return res.status(500).json({ success: false, error: "Failed to fetch menus." });
-    }
-
-    // ✅ คำนวณจำนวนรายการทั้งหมดสำหรับ Pagination
-    db.get("SELECT COUNT(*) AS total FROM menu", [], (err, countRow) => {
-      if (err) {
-        return res.status(500).json({ success: false, error: "Failed to count menus." });
-      }
-      res.status(200).json({
-        success: true,
-        totalCount: countRow.total,
-        data: rows
-      });
-    });
-  });
-});
-
-// ✅ Route สำหรับดึงเมนูเฉพาะ ID
-app.get("/api/menu/:id", (req, res) => {
-  const { id } = req.params;
-
-  if (!id || isNaN(id)) {
-    return res.status(400).json({ success: false, message: "Invalid ID" });
-  }
-
-  db.get("SELECT * FROM menu WHERE id = ?", [id], (err, row) => {
-    if (err) {
-      console.error("Error fetching menu:", err);
-      return res.status(500).json({ success: false, message: "Failed to fetch menu." });
-    }
-    if (!row) {
-      return res.status(404).json({ success: false, message: "Menu not found." });
-    }
-    res.status(200).json({ success: true, data: row });
-  });
+// ✅ Logout Route
+app.post("/api/auth/logout", (req, res) => {
+  res.status(200).json({ success: true, message: "ออกจากระบบสำเร็จ" });
 });
 
 // ✅ Start the server
-app.listen(port, () => {
-  console.log(`🚀 Server running on port ${port}`);
-  console.log(`✅ API available at: http://localhost:${port}/api/menu`);
+app.listen(port, "0.0.0.0", () => {
+  console.log(`🚀 Server running on http://192.168.1.42:${port}`);
 });

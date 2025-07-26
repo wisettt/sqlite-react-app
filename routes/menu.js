@@ -3,16 +3,41 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const Joi = require("joi");
+const cors = require("cors");
 const { authenticateToken } = require("./auth");
 const db = require("../db");
+require("dotenv").config();
 
 const router = express.Router();
 const uploadDir = path.join(__dirname, "../uploads");
 
-// ✅ ตรวจสอบว่าโฟลเดอร์ `uploads` มีอยู่หรือไม่ หากไม่มีให้สร้าง
+// ตรวจสอบและสร้างโฟลเดอร์ uploads ถ้ายังไม่มี
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 
-// ✅ ตั้งค่า Multer สำหรับอัปโหลดไฟล์รูปเมนู
+// ตั้งค่า CORS ให้รองรับเฉพาะ localhost
+const allowedOrigins = ["http://localhost:3000", "http://localhost:5173"];
+const corsOptions = {
+    origin: function (origin, callback) {
+        if (!origin || allowedOrigins.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error("ไม่อนุญาตให้เข้าถึง API จากโดเมนนี้"));
+        }
+    }
+};
+
+router.use(cors(corsOptions));
+router.use(express.json());
+
+// Middleware ตรวจสอบว่า request มาจาก localhost เท่านั้น
+const checkLocalhost = (req, res, next) => {
+    if (req.hostname !== "localhost") {
+        return res.status(403).json({ success: false, message: "API นี้ใช้ได้เฉพาะบน localhost เท่านั้น" });
+    }
+    next();
+};
+
+// ตั้งค่า Multer สำหรับอัปโหลดไฟล์
 const storage = multer.diskStorage({
     destination: uploadDir,
     filename: (req, file, cb) => {
@@ -25,7 +50,7 @@ const upload = multer({
     limits: { fileSize: 2 * 1024 * 1024 }, // จำกัดขนาดไฟล์ 2MB
 });
 
-// ✅ Validation Schema (ลบ categoryId ออก)
+// Validation Schema
 const menuSchema = Joi.object({
     name: Joi.string().required(),
     price: Joi.number().greater(0).required(),
@@ -33,8 +58,8 @@ const menuSchema = Joi.object({
     isAvailable: Joi.boolean().optional(),
 });
 
-// 🔹 ดึงเมนูทั้งหมด
-router.get("/", (req, res) => {
+// ดึงเมนูทั้งหมด
+router.get("/", checkLocalhost, (req, res) => {
     db.all("SELECT * FROM menu", [], (err, rows) => {
         if (err) {
             console.error("❌ Failed to fetch menus:", err);
@@ -44,98 +69,113 @@ router.get("/", (req, res) => {
     });
 });
 
-// 🔹 เพิ่มเมนูใหม่ (คนขายต้องล็อกอิน)
-router.post("/add-menu", authenticateToken, upload.single("image"), (req, res) => {
-    console.log("📌 Received request body:", req.body);
+// ดึงเมนูที่พร้อมให้ใช้งาน
+router.get("/public-menu", (req, res) => {
+    db.all("SELECT * FROM menu WHERE isAvailable = 1 OR isAvailable = true", [], (err, rows) => {
+        if (err) {
+            console.error("❌ Failed to fetch menus:", err);
+            return res.status(500).json({ success: false, error: "Failed to fetch menus." });
+        }
+        res.status(200).json({ success: true, data: rows });
+    });
+});
 
-    const { error, value } = menuSchema.validate(req.body);
-    if (error) {
-        console.error("❌ Validation Error:", error.details[0].message);
-        return res.status(400).json({ success: false, error: error.details[0].message });
+
+// เพิ่มเมนูใหม่
+router.post("/add-menu", upload.single("image"), (req, res) => {
+    console.log("✅ API /add-menu ถูกเรียก");
+    console.log("📥 Data received:", req.body);
+    console.log("📤 File received:", req.file);
+
+
+    const { name, price, details, isAvailable, categoryId } = req.body;
+    const image = req.file ? `/uploads/${req.file.filename}` : null;
+
+    if (!name || !price || !details) {
+        console.error("❌ ข้อมูลไม่ครบ:", req.body);
+        return res.status(400).json({ success: false, message: "กรุณากรอกข้อมูลให้ครบถ้วน" });
     }
 
-    const { name, price, details } = value;
-    const imageUrl = req.file ? `/uploads/${req.file.filename}` : null;
+    const available = isAvailable ? parseInt(isAvailable) : 1; // ✅ ถ้าไม่ได้ส่งมา ให้เป็น 1 (เปิดขาย)
+    const category = categoryId ? parseInt(categoryId) : null; // ✅ ถ้าไม่มี category ให้เป็น null
 
     db.run(
-        `INSERT INTO menu (name, price, details, image, createdAt) VALUES (?, ?, ?, ?, datetime('now'))`,
-        [name, price, details, imageUrl],
+        `INSERT INTO menu (name, price, details, image, isAvailable, createdAt, updatedAt, categoryId) 
+         VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'), ?)`,
+        [name, price, details, image, available, category],
         function (err) {
             if (err) {
                 console.error("❌ Database Error:", err);
-                return res.status(500).json({ success: false, error: "Failed to add menu." });
+                return res.status(500).json({ success: false, message: "เพิ่มเมนูไม่สำเร็จ" });
             }
-
-            res.status(201).json({
-                success: true,
-                message: "เพิ่มเมนูสำเร็จ",
-                data: { id: this.lastID, name, price, details, image: imageUrl },
-            });
+            res.status(201).json({ success: true, message: "เพิ่มเมนูสำเร็จ!", id: this.lastID });
         }
     );
 });
 
-// 🔹 แก้ไขเมนู (คนขายต้องล็อกอิน)
-router.put("/update-menu/:id", authenticateToken, upload.single("image"), (req, res) => {
-    const { id } = req.params;
-    console.log("📌 Update request received for ID:", id);
-    console.log("📌 Request body:", req.body); // 🔍 Debug Request Body
+// แก้ไขเมนู
+router.put("/update-menu/:id", upload.single("image"), (req, res) => {
+    console.log("✅ API /update-menu/:id ถูกเรียก"); 
+    console.log("🔍 Params:", req.params);
+    console.log("📥 Data received:", req.body);
 
-    let { name, price, details, isAvailable } = req.body;
-
-    // 🔥 ตรวจสอบค่าที่ได้รับ
-    console.log("📌 Received name:", name);
-    console.log("📌 Received isAvailable:", isAvailable);
-
-    if (!id || isNaN(id)) {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+        console.error("❌ Invalid ID:", req.params.id);
         return res.status(400).json({ success: false, message: "Invalid ID." });
     }
 
     db.get("SELECT * FROM menu WHERE id = ?", [id], (err, row) => {
         if (err) {
-            console.error("❌ Failed to fetch menu:", err);
+            console.error("❌ Database Error:", err);
             return res.status(500).json({ success: false, error: "Failed to fetch menu." });
         }
         if (!row) {
+            console.error("❌ Menu Not Found:", id);
             return res.status(404).json({ success: false, message: "Menu not found." });
         }
 
-        // ✅ ตั้งค่าเริ่มต้นให้ name, price, details
-        name = name || row.name;
-        price = price || row.price;
-        details = details || row.details;
-        isAvailable = isAvailable !== undefined ? isAvailable : row.isAvailable;
+        const name = req.body.name || row.name;
+        const price = req.body.price || row.price;
+        const details = req.body.details || row.details;
 
-        console.log("📌 Final Update Values:", { name, price, details, isAvailable });
+        // ✅ แก้ปัญหา NaN โดยกำหนดค่า isAvailable ให้แน่นอน
+        let isAvailable;
+        if (req.body.isAvailable === undefined || req.body.isAvailable === "" || req.body.isAvailable === null) {
+            isAvailable = row.isAvailable; // ถ้าไม่ได้ส่งค่ามา ใช้ค่าจากฐานข้อมูล
+        } else {
+            isAvailable = (req.body.isAvailable === "1" || req.body.isAvailable === 1 || req.body.isAvailable === true) ? 1 : 0;
+        }
+
+        const imageUrl = req.file ? `/uploads/${req.file.filename}` : row.image;
 
         db.run(
-            `UPDATE menu SET name = ?, price = ?, details = ?, isAvailable = ?, updatedAt = datetime('now') WHERE id = ?`,
-            [name, price, details, isAvailable, id],
+            `UPDATE menu 
+             SET name = ?, price = ?, details = ?, isAvailable = ?, image = ?, updatedAt = datetime('now') 
+             WHERE id = ?`,
+            [name, price, details, isAvailable, imageUrl, id],
             function (err) {
                 if (err) {
-                    console.error("❌ Failed to update menu:", err);
+                    console.error("❌ Database Error:", err);
                     return res.status(500).json({ success: false, error: "Failed to update menu." });
                 }
-
-                console.log(`✅ Menu ID ${id} updated successfully.`);
-                res.status(200).json({ success: true, message: "แก้ไขเมนูสำเร็จ" });
+                console.log("✅ Update Success:", { id, name, price, details, isAvailable, imageUrl });
+                res.status(200).json({ success: true, message: "แก้ไขเมนูสำเร็จ", updatedId: id });
             }
         );
     });
 });
 
-// 🔹 ลบเมนู (คนขายต้องล็อกอิน)
-router.delete("/delete-menu/:id", authenticateToken, (req, res) => {
+// ลบเมนู
+router.delete("/delete-menu/:id", checkLocalhost, authenticateToken, (req, res) => {
     const { id } = req.params;
+    if (!id || isNaN(id)) {
+        return res.status(400).json({ success: false, message: "Invalid ID." });
+    }
 
     db.get("SELECT * FROM menu WHERE id = ?", [id], (err, row) => {
-        if (err) {
-            console.error("❌ Failed to fetch menu:", err);
-            return res.status(500).json({ success: false, error: "Failed to fetch menu." });
-        }
-        if (!row) {
-            return res.status(404).json({ success: false, message: "Menu not found." });
-        }
+        if (err) return res.status(500).json({ success: false, error: "Failed to fetch menu." });
+        if (!row) return res.status(404).json({ success: false, message: "Menu not found." });
 
         if (row.image) {
             const imagePath = path.join(__dirname, "..", row.image);
@@ -143,11 +183,7 @@ router.delete("/delete-menu/:id", authenticateToken, (req, res) => {
         }
 
         db.run("DELETE FROM menu WHERE id = ?", [id], function (err) {
-            if (err) {
-                console.error("❌ Failed to delete menu:", err);
-                return res.status(500).json({ success: false, error: "Failed to delete menu." });
-            }
-
+            if (err) return res.status(500).json({ success: false, error: "Failed to delete menu." });
             res.status(200).json({ success: true, message: "ลบเมนูสำเร็จ" });
         });
     });
